@@ -10,7 +10,7 @@ const PORT = 3000;
 const DATA_FILE = path.join(__dirname, "data.json");
 
 // 🔥 DEIN MONGO STRING
-const uri = "mongodb+srv://ananassosse:Einstellung1%21@cluster0.8qjy2xi.mongodb.net/noxa?retryWrites=true&w=majority";
+const uri = process.env.MONGO_URI;
 
 const client = new MongoClient(uri);
 let usersCollection;
