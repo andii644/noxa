@@ -1,0 +1,195 @@
+:root {
+  --bg: #050816;
+  --panel: rgba(10, 14, 35, 0.75);
+  --text: #ffffff;
+  --muted: #9aa4d6;
+  --purple: #8a2be2;
+  --pink: #ff69b4;
+  --gold: #ffcc00;
+  --green: #19ff95;
+}
+
+/* RESET */
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at center, #0a0f2c, #020412);
+}
+
+/* ================= AUTH ================= */
+
+.auth-screen {
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.auth-panel {
+  width: 360px;
+  padding: 30px;
+  border-radius: 20px;
+  background: var(--panel);
+  text-align: center;
+}
+
+.auth-title {
+  font-size: 28px;
+  font-weight: bold;
+  margin-bottom: 20px;
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.auth-tabs button {
+  flex: 1;
+  padding: 10px;
+  border-radius: 10px;
+  background: #111;
+  color: white;
+  cursor: pointer;
+}
+
+.auth-tabs .active {
+  background: linear-gradient(45deg, var(--purple), var(--pink));
+}
+
+.auth-panel input {
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  border: none;
+}
+
+.primary-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  background: linear-gradient(45deg, var(--purple), var(--pink));
+  border: none;
+  color: white;
+  cursor: pointer;
+}
+
+/* ================= APP LAYOUT ================= */
+
+/* 🔥 WICHTIG: KEIN FIXED mehr */
+.topbar {
+  width: 100%;
+  height: 70px;
+  background: rgba(10, 14, 35, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+}
+
+/* MAIN AREA */
+.app {
+  padding-top: 10px;
+  height: calc(100vh - 70px);
+  display: flex;
+}
+
+/* CONTENT */
+.content {
+  flex: 1;
+  padding: 20px;
+}
+
+/* SIDE MENU */
+.sidebar {
+  width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.sidebar button {
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.05);
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+.sidebar button:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+/* ================= GAME ================= */
+
+.game-area {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* SLIME */
+.slime {
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #19ff95, #05b36a);
+  box-shadow: 0 0 40px rgba(25,255,149,0.6);
+}
+
+/* COINS */
+.coin {
+  position: absolute;
+  top: -60px;
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffe36f, #ffcc00);
+  box-shadow: 0 0 30px rgba(255,204,0,0.8);
+  cursor: pointer;
+  animation: fall 5s linear;
+}
+
+@keyframes fall {
+  to { top: 110%; }
+}
+
+/* ================= CARDS ================= */
+
+.grid {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.card {
+  width: 180px;
+  padding: 15px;
+  border-radius: 15px;
+  background: rgba(255,255,255,0.05);
+}
+
+/* RARITY GLOW */
+.common { box-shadow: 0 0 10px gray; }
+.uncommon { box-shadow: 0 0 15px lime; }
+.rare { box-shadow: 0 0 20px cyan; }
+.epic { box-shadow: 0 0 25px purple; }
+.legendary { box-shadow: 0 0 30px gold; }
+
+/* ================= LEADERBOARD ================= */
+
+.leader-row {
+  padding: 12px;
+  background: rgba(255,255,255,0.05);
+  margin-bottom: 10px;
+  border-radius: 10px;
+}
