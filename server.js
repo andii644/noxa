@@ -60,28 +60,49 @@ function getDefaultUserData(overrides = {}) {
   };
 }
 
+function getEquipmentTotals(equipped = {}) {
+  return {
+    dmg:
+      (equipped.cap?.dmgBonus || 0) +
+      (equipped.shirt?.dmgBonus || 0) +
+      (equipped.pants?.dmgBonus || 0) +
+      (equipped.shoes?.dmgBonus || 0),
+    hp:
+      (equipped.cap?.hpBonus || 0) +
+      (equipped.shirt?.hpBonus || 0) +
+      (equipped.pants?.hpBonus || 0) +
+      (equipped.shoes?.hpBonus || 0),
+    defense:
+      (equipped.cap?.defenseBonus || 0) +
+      (equipped.shirt?.defenseBonus || 0) +
+      (equipped.pants?.defenseBonus || 0) +
+      (equipped.shoes?.defenseBonus || 0)
+  };
+}
+
 function getSafeUser(user) {
-  const totalDefense = 
-    (user.equipped?.cap?.defenseBonus || 0) +
-    (user.equipped?.shirt?.defenseBonus || 0) +
-    (user.equipped?.pants?.defenseBonus || 0) +
-    (user.equipped?.shoes?.defenseBonus || 0);
+  const equipped = user.equipped || { cap: null, shirt: null, pants: null, shoes: null };
+  const bonuses = getEquipmentTotals(equipped);
+  const baseMaxHp = user.maxHp || 100;
+  const effectiveMaxHp = baseMaxHp + bonuses.hp;
+  const storedCurrentHp = user.currentHp ?? baseMaxHp;
+  const effectiveCurrentHp = Math.max(0, Math.min(storedCurrentHp + bonuses.hp, effectiveMaxHp));
 
   return {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
     coins: user.coins,
-    dmg: user.dmg,
-    maxHp: user.maxHp,
-    currentHp: user.currentHp,
-    defense: totalDefense,
+    dmg: (user.dmg || 1) + bonuses.dmg,
+    maxHp: effectiveMaxHp,
+    currentHp: effectiveCurrentHp,
+    defense: (user.defense || 0) + bonuses.defense,
     xp: user.xp,
     level: user.level,
     lootboxes: user.lootboxes,
     totalKills: user.totalKills,
     inventory: user.inventory || [],
-    equipped: user.equipped || { cap: null, shirt: null, pants: null, shoes: null }
+    equipped
   };
 }
 
@@ -98,6 +119,12 @@ async function addItemToInventory(userId, baseItem) {
   let user = await usersCollection.findOne({ id: userId });
   if (!user) return;
 
+  if (baseItem.slot) {
+    const newItem = { ...baseItem, id: Date.now() + Math.floor(Math.random() * 100000), quantity: 1 };
+    await usersCollection.updateOne({ id: userId }, { $push: { inventory: newItem } });
+    return;
+  }
+
   const itemKey = `${baseItem.name}|${baseItem.rarity}|${baseItem.upgradeLevel || 0}`;
   const existingIndex = user.inventory.findIndex(i => 
     `${i.name}|${i.rarity}|${i.upgradeLevel || 0}` === itemKey
@@ -110,6 +137,71 @@ async function addItemToInventory(userId, baseItem) {
     const newItem = { ...baseItem, id: Date.now() + Math.floor(Math.random() * 100000), quantity: 1 };
     await usersCollection.updateOne({ id: userId }, { $push: { inventory: newItem } });
   }
+}
+
+function removeItemQuantity(inventory, itemName, amount) {
+  let remaining = amount;
+
+  for (let i = inventory.length - 1; i >= 0 && remaining > 0; i--) {
+    if (inventory[i].name !== itemName) continue;
+
+    const quantity = inventory[i].quantity || 1;
+    if (quantity > remaining) {
+      inventory[i].quantity = quantity - remaining;
+      remaining = 0;
+    } else {
+      remaining -= quantity;
+      inventory.splice(i, 1);
+    }
+  }
+
+  return remaining === 0;
+}
+
+function sanitizeBetAmount(value) {
+  const amount = Math.floor(Number(value));
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return amount;
+}
+
+function drawBlackjackCard() {
+  const ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+  return ranks[Math.floor(Math.random() * ranks.length)];
+}
+
+function calculateBlackjackTotal(hand) {
+  let total = 0;
+  let aces = 0;
+
+  for (const card of hand) {
+    if (card === "A") {
+      total += 11;
+      aces++;
+    } else if (["J", "Q", "K"].includes(card)) {
+      total += 10;
+    } else {
+      total += Number(card);
+    }
+  }
+
+  while (total > 21 && aces > 0) {
+    total -= 10;
+    aces--;
+  }
+
+  return total;
+}
+
+function getBlackjackState(game, revealDealer = false) {
+  return {
+    betAmount: game.betAmount,
+    playerHand: game.playerHand,
+    dealerHand: revealDealer ? game.dealerHand : [game.dealerHand[0], "?"],
+    playerTotal: calculateBlackjackTotal(game.playerHand),
+    dealerTotal: revealDealer ? calculateBlackjackTotal(game.dealerHand) : null,
+    finished: Boolean(game.finished),
+    resultText: game.resultText || ""
+  };
 }
 
 // ================= IDLE SYSTEM =================
@@ -209,8 +301,13 @@ app.get("/api/me", requireAuth, async (req, res) => {
 // ================= COMBAT & LEVEL SYSTEM =================
 app.post("/api/kill-mob", requireAuth, async (req, res) => {
   let user = await refreshUser(req.session.userId);
-  const gold = Math.floor(12 + Math.random() * 18);
-  const xpGain = 15;
+  const requestedTier = Math.max(1, Math.min(40, parseInt(req.body?.tier, 10) || 1));
+  const tierCap = Math.max(1, Math.ceil((user.level || 1) / 2) + 3);
+  const tier = Math.min(requestedTier, tierCap);
+  const isBoss = (req.body?.boss === true || req.body?.boss === "true") && tier >= 4;
+  const gold = Math.floor(12 + Math.random() * 18 + (tier - 1) * 4 + (isBoss ? 30 + tier * 2 : 0));
+  const xpGain = 15 + (tier - 1) * 4 + (isBoss ? 28 + tier * 3 : 0);
+  const lootboxesGained = isBoss ? 1 : 0;
 
   let newXp = (user.xp || 0) + xpGain;
   let newLevel = user.level || 1;
@@ -226,14 +323,23 @@ app.post("/api/kill-mob", requireAuth, async (req, res) => {
   await addItemToInventory(req.session.userId, scrap);
 
   await usersCollection.updateOne({ id: req.session.userId }, {
-    $inc: { coins: gold, totalKills: 1 },
-    $set: { level: newLevel, xp: newXp }
+    $inc: { coins: gold, totalKills: 1, lootboxes: lootboxesGained },
+    $set: { level: newLevel, xp: newXp, lastUpdated: new Date() }
   });
 
   user = await refreshUser(req.session.userId);
-  res.json({ success: true, user: getSafeUser(user), leveledUp: levelsGained > 0, levelsGained, xpGain });
+  res.json({
+    success: true,
+    user: getSafeUser(user),
+    leveledUp: levelsGained > 0,
+    levelsGained,
+    xpGain,
+    goldGain: gold,
+    lootboxesGained
+  });
 });
 
+// 🔥 FIX: Bei jedem Level-Up wird jetzt IMMER auf volle maxHp geheilt (egal ob DMG oder HP gewählt)
 app.post("/api/apply-level-bonus", requireAuth, async (req, res) => {
   const { choice } = req.body;
   let user = await refreshUser(req.session.userId);
@@ -241,8 +347,16 @@ app.post("/api/apply-level-bonus", requireAuth, async (req, res) => {
   if (choice === "dmg") {
     await usersCollection.updateOne({ id: req.session.userId }, { $inc: { dmg: 1 } });
   } else if (choice === "hp") {
-    await usersCollection.updateOne({ id: req.session.userId }, { $inc: { maxHp: 15, currentHp: 15 } });
+    await usersCollection.updateOne({ id: req.session.userId }, { $inc: { maxHp: 15 } });
   }
+
+  // Immer volle Heilung nach Level-Up
+  const updatedUser = await usersCollection.findOne({ id: req.session.userId });
+  const newMaxHp = updatedUser.maxHp || 100;
+  
+  await usersCollection.updateOne({ id: req.session.userId }, { 
+    $set: { currentHp: newMaxHp, lastUpdated: new Date() }
+  });
 
   user = await refreshUser(req.session.userId);
   res.json({ success: true, user: getSafeUser(user) });
@@ -250,22 +364,35 @@ app.post("/api/apply-level-bonus", requireAuth, async (req, res) => {
 
 app.post("/api/take-damage", requireAuth, async (req, res) => {
   const { damage } = req.body;
-  let user = await refreshUser(req.session.userId);
-  let newHp = Math.max(0, (user.currentHp || 100) - damage);
+  let user = await usersCollection.findOne({ id: req.session.userId });
+  const equipped = user.equipped || { cap: null, shirt: null, pants: null, shoes: null };
+  const bonuses = getEquipmentTotals(equipped);
+  const rawMaxHp = user.maxHp || 100;
+  const effectiveMaxHp = rawMaxHp + bonuses.hp;
+  const effectiveCurrentHp = Math.min((user.currentHp ?? rawMaxHp) + bonuses.hp, effectiveMaxHp);
+  const nextEffectiveHp = Math.max(0, effectiveCurrentHp - Math.max(0, Number(damage) || 0));
+  const nextRawHp = Math.min(rawMaxHp, nextEffectiveHp - bonuses.hp);
 
-  await usersCollection.updateOne({ id: req.session.userId }, { $set: { currentHp: newHp, lastUpdated: new Date() } });
+  await usersCollection.updateOne(
+    { id: req.session.userId },
+    { $set: { currentHp: nextRawHp, lastUpdated: new Date() } }
+  );
 
   user = await usersCollection.findOne({ id: req.session.userId });
-  res.json({ success: true, user: getSafeUser(user), isDead: newHp <= 0 });
+  res.json({ success: true, user: getSafeUser(user), isDead: nextEffectiveHp <= 0 });
 });
 
+// 🔥 FIX: Respawn heilt jetzt immer auf die aktuelle maxHp (nicht hart auf 100)
 app.post("/api/respawn", requireAuth, async (req, res) => {
-  let user = await refreshUser(req.session.userId);
+  let user = await usersCollection.findOne({ id: req.session.userId });
   const lostCoins = Math.floor((user.coins || 0) * 0.25);
 
   await usersCollection.updateOne({ id: req.session.userId }, {
     $inc: { coins: -lostCoins },
-    $set: { currentHp: user.maxHp || 100, lastUpdated: new Date() }
+    $set: { 
+      currentHp: user.maxHp || 100, 
+      lastUpdated: new Date() 
+    }
   });
 
   user = await refreshUser(req.session.userId);
@@ -288,12 +415,210 @@ app.post("/api/open-starter-box", requireAuth, async (req, res) => {
   if ((user.coins || 0) < 100) return res.status(400).json({ error: "Zu wenig Coins" });
 
   const base = getRandomLootItem();
-  await addItemToInventory(req.session.userId, base);
-
   await usersCollection.updateOne({ id: req.session.userId }, { $inc: { coins: -100, lootboxes: 1 } });
+  await addItemToInventory(req.session.userId, base);
 
   user = await refreshUser(req.session.userId);
   res.json({ success: true, user: getSafeUser(user), itemWon: base });
+});
+
+// ================= KASINO =================
+app.post("/api/casino/roulette", requireAuth, async (req, res) => {
+  const betAmount = sanitizeBetAmount(req.body.betAmount);
+  const color = String(req.body.color || "").toLowerCase();
+  if (!["rot", "schwarz", "gruen"].includes(color)) {
+    return res.status(400).json({ error: "Ungültige Farbe" });
+  }
+  if (betAmount < 10) {
+    return res.status(400).json({ error: "Mindesteinsatz ist 10 Coins" });
+  }
+
+  let user = await refreshUser(req.session.userId);
+  if ((user.coins || 0) < betAmount) {
+    return res.status(400).json({ error: "Zu wenig Coins" });
+  }
+
+  const roll = Math.floor(Math.random() * 37);
+  const landedColor = roll === 0 ? "gruen" : roll % 2 === 0 ? "schwarz" : "rot";
+  const multiplier = color === "gruen" ? 14 : 2;
+  const win = landedColor === color;
+  const payout = win ? betAmount * multiplier : 0;
+  const delta = payout - betAmount;
+
+  await usersCollection.updateOne(
+    { id: req.session.userId },
+    { $inc: { coins: delta }, $set: { lastUpdated: new Date() } }
+  );
+
+  user = await refreshUser(req.session.userId);
+  res.json({
+    success: true,
+    win,
+    rolledNumber: roll,
+    landedColor,
+    payout,
+    delta,
+    user: getSafeUser(user)
+  });
+});
+
+app.post("/api/casino/slots", requireAuth, async (req, res) => {
+  const betAmount = sanitizeBetAmount(req.body.betAmount);
+  if (betAmount < 10) {
+    return res.status(400).json({ error: "Mindesteinsatz ist 10 Coins" });
+  }
+
+  let user = await refreshUser(req.session.userId);
+  if ((user.coins || 0) < betAmount) {
+    return res.status(400).json({ error: "Zu wenig Coins" });
+  }
+
+  const symbols = ["KIRSCHE", "7", "SCHWERT", "SCHILD", "KRONE", "SLIME"];
+  const reels = Array.from({ length: 3 }, () => symbols[Math.floor(Math.random() * symbols.length)]);
+
+  let multiplier = 0;
+  if (reels[0] === reels[1] && reels[1] === reels[2]) {
+    multiplier = reels[0] === "7" ? 8 : reels[0] === "KRONE" ? 6 : 5;
+  } else if (new Set(reels).size === 2) {
+    multiplier = 2;
+  }
+
+  const payout = multiplier > 0 ? betAmount * multiplier : 0;
+  const delta = payout - betAmount;
+
+  await usersCollection.updateOne(
+    { id: req.session.userId },
+    { $inc: { coins: delta }, $set: { lastUpdated: new Date() } }
+  );
+
+  user = await refreshUser(req.session.userId);
+  res.json({
+    success: true,
+    reels,
+    multiplier,
+    payout,
+    win: payout > 0,
+    delta,
+    user: getSafeUser(user)
+  });
+});
+
+app.post("/api/casino/blackjack/start", requireAuth, async (req, res) => {
+  const betAmount = sanitizeBetAmount(req.body.betAmount);
+  if (betAmount < 10) {
+    return res.status(400).json({ error: "Mindesteinsatz ist 10 Coins" });
+  }
+
+  let user = await refreshUser(req.session.userId);
+  if ((user.coins || 0) < betAmount) {
+    return res.status(400).json({ error: "Zu wenig Coins" });
+  }
+
+  const game = {
+    betAmount,
+    playerHand: [drawBlackjackCard(), drawBlackjackCard()],
+    dealerHand: [drawBlackjackCard(), drawBlackjackCard()],
+    finished: false,
+    resultText: ""
+  };
+
+  await usersCollection.updateOne(
+    { id: req.session.userId },
+    { $inc: { coins: -betAmount }, $set: { lastUpdated: new Date() } }
+  );
+
+  const playerTotal = calculateBlackjackTotal(game.playerHand);
+  const dealerTotal = calculateBlackjackTotal(game.dealerHand);
+
+  if (playerTotal === 21 || dealerTotal === 21) {
+    game.finished = true;
+    let payout = 0;
+
+    if (playerTotal === 21 && dealerTotal === 21) {
+      payout = betAmount;
+      game.resultText = "Beide haben Blackjack. Einsatz zurück.";
+    } else if (playerTotal === 21) {
+      payout = Math.floor(betAmount * 2.5);
+      game.resultText = "Blackjack. Du gewinnst.";
+    } else {
+      game.resultText = "Dealer hat Blackjack.";
+    }
+
+    if (payout > 0) {
+      await usersCollection.updateOne(
+        { id: req.session.userId },
+        { $inc: { coins: payout }, $set: { lastUpdated: new Date() } }
+      );
+    }
+  }
+
+  req.session.blackjackGame = game.finished ? null : game;
+  user = await refreshUser(req.session.userId);
+
+  res.json({
+    success: true,
+    game: getBlackjackState(game, game.finished),
+    user: getSafeUser(user)
+  });
+});
+
+app.post("/api/casino/blackjack/hit", requireAuth, async (req, res) => {
+  const game = req.session.blackjackGame;
+  if (!game || game.finished) {
+    return res.status(400).json({ error: "Kein aktives Blackjack-Spiel" });
+  }
+
+  game.playerHand.push(drawBlackjackCard());
+  const total = calculateBlackjackTotal(game.playerHand);
+
+  if (total > 21) {
+    game.finished = true;
+    game.resultText = "Überkauft. Du verlierst.";
+    req.session.blackjackGame = null;
+    const user = await refreshUser(req.session.userId);
+    return res.json({ success: true, game: getBlackjackState(game, true), user: getSafeUser(user) });
+  }
+
+  req.session.blackjackGame = game;
+  const user = await refreshUser(req.session.userId);
+  res.json({ success: true, game: getBlackjackState(game, false), user: getSafeUser(user) });
+});
+
+app.post("/api/casino/blackjack/stand", requireAuth, async (req, res) => {
+  const game = req.session.blackjackGame;
+  if (!game || game.finished) {
+    return res.status(400).json({ error: "Kein aktives Blackjack-Spiel" });
+  }
+
+  while (calculateBlackjackTotal(game.dealerHand) < 17) {
+    game.dealerHand.push(drawBlackjackCard());
+  }
+
+  const playerTotal = calculateBlackjackTotal(game.playerHand);
+  const dealerTotal = calculateBlackjackTotal(game.dealerHand);
+  let payout = 0;
+
+  if (dealerTotal > 21 || playerTotal > dealerTotal) {
+    payout = game.betAmount * 2;
+    game.resultText = "Du gewinnst.";
+  } else if (playerTotal === dealerTotal) {
+    payout = game.betAmount;
+    game.resultText = "Unentschieden. Einsatz zurück.";
+  } else {
+    game.resultText = "Dealer gewinnt.";
+  }
+
+  if (payout > 0) {
+    await usersCollection.updateOne(
+      { id: req.session.userId },
+      { $inc: { coins: payout }, $set: { lastUpdated: new Date() } }
+    );
+  }
+
+  game.finished = true;
+  req.session.blackjackGame = null;
+  const user = await refreshUser(req.session.userId);
+  res.json({ success: true, game: getBlackjackState(game, true), user: getSafeUser(user) });
 });
 
 // ================= EQUIP / UNEQUIP / UPGRADE / SELL =================
@@ -303,11 +628,27 @@ app.post("/api/equip-item", requireAuth, async (req, res) => {
   const item = (user.inventory || []).find(i => String(i.id) === String(itemId));
   if (!item || !item.slot) return res.status(400).json({ error: "Item kann nicht ausgerüstet werden" });
 
+  user.equipped = user.equipped || { cap: null, shirt: null, pants: null, shoes: null };
   const oldItem = user.equipped[item.slot];
-  const update = { $pull: { inventory: { id: item.id } }, $set: { [`equipped.${item.slot}`]: item } };
-  if (oldItem) update.$push = { inventory: oldItem };
+  const equippedItem = { ...item, id: Date.now() + Math.floor(Math.random() * 100000), quantity: 1 };
 
-  await usersCollection.updateOne({ id: req.session.userId }, update);
+  if ((item.quantity || 1) > 1) {
+    user.inventory = (user.inventory || []).map((entry) =>
+      String(entry.id) === String(itemId)
+        ? { ...entry, quantity: (entry.quantity || 1) - 1 }
+        : entry
+    );
+  } else {
+    user.inventory = (user.inventory || []).filter((entry) => String(entry.id) !== String(itemId));
+  }
+
+  if (oldItem) user.inventory.push({ ...oldItem, quantity: 1 });
+  user.equipped[item.slot] = equippedItem;
+
+  await usersCollection.updateOne(
+    { id: req.session.userId },
+    { $set: { inventory: user.inventory, equipped: user.equipped } }
+  );
   user = await refreshUser(req.session.userId);
   res.json({ success: true, user: getSafeUser(user) });
 });
@@ -315,11 +656,12 @@ app.post("/api/equip-item", requireAuth, async (req, res) => {
 app.post("/api/unequip-item", requireAuth, async (req, res) => {
   const { slot } = req.body;
   let user = await refreshUser(req.session.userId);
+  user.equipped = user.equipped || { cap: null, shirt: null, pants: null, shoes: null };
   const item = user.equipped[slot];
   if (!item) return res.status(400).json({ error: "Nichts zum Ausziehen" });
 
   await usersCollection.updateOne({ id: req.session.userId }, {
-    $unset: { [`equipped.${slot}`]: "" },
+    $set: { [`equipped.${slot}`]: null },
     $push: { inventory: item }
   });
 
@@ -342,23 +684,83 @@ app.post("/api/upgrade-item", requireAuth, async (req, res) => {
 
   if (shardsAvailable < needed) return res.status(400).json({ error: `Du brauchst ${needed} ${shardName}!` });
 
-  const upgradedItem = { ...item };
+  const upgradedItem = { ...item, id: Date.now() + Math.floor(Math.random() * 100000), quantity: 1 };
   upgradedItem.rarity = item.rarity === "gray" ? "green" : "blue";
   upgradedItem.upgradeLevel = (item.upgradeLevel || 0) + 1;
   upgradedItem.dmgBonus = Math.floor(item.dmgBonus * 1.4);
   upgradedItem.hpBonus = Math.floor(item.hpBonus * 1.4);
   upgradedItem.defenseBonus = Math.floor(item.defenseBonus * 1.4);
-  upgradedItem.name = item.name.replace("Gray", upgradedItem.rarity.charAt(0).toUpperCase() + upgradedItem.rarity.slice(1));
-
-  await usersCollection.updateOne({ id: req.session.userId }, { $pull: { inventory: { id: item.id } } });
-  await usersCollection.updateOne({ id: req.session.userId }, { $push: { inventory: upgradedItem } });
-
-  for (let i = 0; i < needed; i++) {
-    await usersCollection.updateOne({ id: req.session.userId }, { $pull: { inventory: { name: shardName } } });
+  upgradedItem.name = item.rarity === "gray"
+    ? item.name.replace("Gray", "Green")
+    : item.name.replace("Green", "Blue");
+  if ((item.quantity || 1) > 1) {
+    user.inventory[itemIndex].quantity = (item.quantity || 1) - 1;
+  } else {
+    user.inventory.splice(itemIndex, 1);
   }
+  removeItemQuantity(user.inventory, shardName, needed);
+  user.inventory.push(upgradedItem);
+
+  await usersCollection.updateOne(
+    { id: req.session.userId },
+    { $set: { inventory: user.inventory } }
+  );
 
   user = await refreshUser(req.session.userId);
   res.json({ success: true, user: getSafeUser(user) });
+});
+
+app.post("/api/upgrade-item-progress", requireAuth, async (req, res) => {
+  const { itemId, amount = 1 } = req.body;
+  const shardAmount = Math.max(1, Math.floor(Number(amount) || 1));
+  let user = await refreshUser(req.session.userId);
+  const itemIndex = (user.inventory || []).findIndex(i => String(i.id) === String(itemId));
+  if (itemIndex === -1) return res.status(400).json({ error: "Item nicht gefunden" });
+
+  const item = user.inventory[itemIndex];
+  if (!item.slot) return res.status(400).json({ error: "Item kann nicht verbessert werden" });
+
+  const isGray = item.rarity === "gray";
+  const isGreen = item.rarity === "green";
+  if (!isGray && !isGreen) return res.status(400).json({ error: "Dieses Item kann nicht weiter verbessert werden" });
+
+  const shardName = isGray ? "Green Shard" : "Blue Shard";
+  const needed = isGray ? 30 : 50;
+  const available = countItemInInventory(user.inventory, shardName);
+  if (available <= 0) return res.status(400).json({ error: `Keine ${shardName} verfügbar` });
+
+  const currentProgress = item.progress || 0;
+  const missing = needed - currentProgress;
+  const toUse = Math.min(shardAmount, available, missing);
+  if (toUse <= 0) return res.status(400).json({ error: "Dieses Item ist bereits upgradebereit" });
+
+  const updatedItem = { ...item, progress: currentProgress + toUse };
+  let upgraded = false;
+
+  if (updatedItem.progress >= needed) {
+    const oldRarity = updatedItem.rarity;
+    updatedItem.rarity = oldRarity === "gray" ? "green" : "blue";
+    updatedItem.upgradeLevel = (updatedItem.upgradeLevel || 0) + 1;
+    updatedItem.dmgBonus = Math.floor(updatedItem.dmgBonus * 1.4);
+    updatedItem.hpBonus = Math.floor(updatedItem.hpBonus * 1.4);
+    updatedItem.defenseBonus = Math.floor(updatedItem.defenseBonus * 1.4);
+    updatedItem.name = oldRarity === "gray"
+      ? updatedItem.name.replace("Gray", "Green")
+      : updatedItem.name.replace("Green", "Blue");
+    updatedItem.progress = 0;
+    upgraded = true;
+  }
+
+  user.inventory[itemIndex] = updatedItem;
+  removeItemQuantity(user.inventory, shardName, toUse);
+
+  await usersCollection.updateOne(
+    { id: req.session.userId },
+    { $set: { inventory: user.inventory } }
+  );
+
+  user = await refreshUser(req.session.userId);
+  res.json({ success: true, user: getSafeUser(user), upgraded, used: toUse, shardName, needed, progress: updatedItem.progress || 0 });
 });
 
 app.post("/api/sell-item", requireAuth, async (req, res) => {
@@ -396,6 +798,10 @@ app.post("/api/forge-add-shard", requireAuth, async (req, res) => {
   if (!item || !item.slot) return res.status(400).json({ error: "Kein Item im Amboss" });
 
   const isGray = item.rarity === "gray";
+  const isGreen = item.rarity === "green";
+  if (!isGray && !isGreen) {
+    return res.status(400).json({ error: "Dieses Item kann nicht weiter verbessert werden" });
+  }
   const shardName = isGray ? "Green Shard" : "Blue Shard";
   const needed = isGray ? 30 : 50;
 
